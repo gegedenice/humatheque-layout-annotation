@@ -518,7 +518,7 @@ def make_app():
             with gr.Row():
                 image_url = gr.Textbox(
                     label="Image URL",
-                    placeholder="https://raw.githubusercontent.com/.../123456789/p0001.png",
+                    placeholder="https://minio.smartbiblia.fr/images/.../p1.png",
                     scale=5,
                 )
                 load_btn = gr.Button("Load image", scale=1, variant="primary")
