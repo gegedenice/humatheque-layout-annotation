@@ -17,7 +17,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY . /app
 
 # Port (informative)
-EXPOSE 8000
+EXPOSE 7860
 
 USER appuser
 
