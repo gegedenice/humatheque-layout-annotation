@@ -165,6 +165,40 @@ def refresh_tree():
     except Exception as e:
         return gr.update(), f"Erreur de rafraichissement : {e}"
 
+def normalize_object_name(selected_str: str, candidate: Path, bucket: str, tree_root: Path) -> str:
+    def _extract_from_path(path_str: str) -> str:
+        p = (path_str or "").replace("\\", "/").strip().strip('"').strip("'")
+        parts = [x for x in p.split("/") if x and x != "."]
+
+        # Robust extraction for paths that include ".../.bucket_tree/<bucket>/..."
+        for i in range(len(parts) - 1):
+            if parts[i] == ".bucket_tree" and parts[i + 1] == bucket:
+                return "/".join(parts[i + 2 :])
+
+        # Common case: path starts with "<bucket>/..."
+        if parts and parts[0] == bucket:
+            return "/".join(parts[1:])
+
+        return "/".join(parts)
+
+    for raw in (selected_str, candidate.as_posix()):
+        object_name = _extract_from_path(raw)
+        if object_name:
+            tree_root_norm = tree_root.resolve().as_posix().rstrip("/")
+            if object_name.startswith(tree_root_norm + "/"):
+                object_name = object_name[len(tree_root_norm) + 1 :]
+
+            tree_root_rel = str(tree_root).replace("\\", "/").rstrip("/")
+            if object_name.startswith(tree_root_rel + "/"):
+                object_name = object_name[len(tree_root_rel) + 1 :]
+
+            if object_name.startswith(f"{bucket}/"):
+                object_name = object_name[len(bucket) + 1 :]
+
+            if object_name:
+                return object_name
+    return ""
+
 def load_image_from_tree(selected_path=None, auto_metadata=True, evt: gr.SelectData = None):
     print(f"[tree] raw selected_path={selected_path!r}", flush=True)
     if evt is not None:
@@ -237,21 +271,7 @@ def load_image_from_tree(selected_path=None, auto_metadata=True, evt: gr.SelectD
     if candidate.exists() and candidate.is_dir():
         return _ret(status_msg=f"Dossier selectionne : {candidate}")
 
-    normalized = selected_str.replace("\\", "/")
-    if candidate.is_absolute():
-        normalized = candidate.as_posix()
-
-    object_name = normalized.lstrip("./")
-    tree_root_norm = TREE_ROOT.resolve().as_posix().rstrip("/")
-    if object_name.startswith(tree_root_norm + "/"):
-        object_name = object_name[len(tree_root_norm) + 1 :]
-    else:
-        tree_root_rel = str(TREE_ROOT).replace("\\", "/").rstrip("/")
-        if object_name.startswith(tree_root_rel + "/"):
-            object_name = object_name[len(tree_root_rel) + 1 :]
-
-    if object_name.startswith(f"{BUCKET}/"):
-        object_name = object_name[len(BUCKET) + 1 :]
+    object_name = normalize_object_name(selected_str, candidate, BUCKET, TREE_ROOT)
 
     if not object_name:
         print("[tree] object_name empty after normalization", flush=True)
@@ -671,8 +691,8 @@ def make_app():
                 <div class="hero">
                   <h1 style="margin:0;">Application d'annotation de blocs</h1>
                   <p style="margin:6px 0 0 0;">
-                    Chargez une URL d'image, dessinez des boites englobantes en deux clics,
-                    assignez un label de bloc, puis enregistrez via l'API.
+                    Objectif (phase préparatoire VLM) : sur la base d'un échantilon, obtenir des statistiques objectives sur la répartition formelle (localisation) de l'information bibliographique 
+                    selon les types de documents (thèses vs mémoires), les années ou les disciplines.
                   </p>
                 </div>
                 """
