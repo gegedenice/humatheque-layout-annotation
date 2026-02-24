@@ -681,7 +681,7 @@ def make_app():
         TREE_ROOT.mkdir(parents=True, exist_ok=True)
     
     with gr.Blocks(
-        title="Mise en page - annotation de boites",
+        title="Annotation app",
         theme=gr.themes.Soft(primary_hue="blue", secondary_hue="slate"),
         css=custom_css,
     ) as demo:
