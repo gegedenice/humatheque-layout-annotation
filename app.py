@@ -50,6 +50,7 @@ MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT_URL")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY")
 BUCKET_NAME = os.getenv("MINIO_BUCKET_NAME", "images")
+MINIO_PUBLIC_BASE = os.getenv("MINIO_PUBLIC_BASE_URL", "https://minio.smartbiblia.fr").rstrip("/")
 
 MINIO_ENABLED = bool(MINIO_ENDPOINT and MINIO_ACCESS_KEY and MINIO_SECRET_KEY)
 minio_client = None
