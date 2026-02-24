@@ -26,7 +26,6 @@ Env (local) :
   API_BASE_URL=http://localhost:8000
   API_KEY=...
 """
-
 import os
 import io
 import json
@@ -35,6 +34,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import List, Tuple
+from urllib.parse import quote, urlparse
 
 import requests
 import numpy as np
