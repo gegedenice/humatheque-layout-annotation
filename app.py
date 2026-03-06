@@ -71,6 +71,15 @@ if MINIO_ENABLED:
 BUCKET = BUCKET_NAME
 TREE_ROOT = Path("./.bucket_tree") / BUCKET
 
+MEMOIRE_TYPE_OPTIONS = {
+    "dea": "Mémoire de DEA",
+    "dess": "Mémoire de DESS",
+    "maitrise": "Mémoire de maîtrise",
+    "master": "Mémoire de master",
+    "hdr": "HDR",
+    "autres": "Autres",
+}
+
 # -----------------------
 # API helpers
 # -----------------------
