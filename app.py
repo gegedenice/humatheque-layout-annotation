@@ -355,6 +355,79 @@ def refresh_reference_data():
     block_choices = [f'{b["code"]} | {b["label"]}' for b in blocks]
     return camp_choices, block_choices, campaigns, blocks
 
+def _case_id_from_row(row: dict) -> str:
+    return str(row.get("case_id") or row.get("id") or "").strip()
+
+def _build_image_url_from_case(row: dict) -> str:
+    image_uri = (row.get("image_uri") or "").strip()
+    if image_uri:
+        return image_uri
+    source_ref = (row.get("source_ref") or "").strip().lstrip("/")
+    if source_ref:
+        if source_ref.startswith("http://") or source_ref.startswith("https://"):
+            return source_ref
+        return f"{MINIO_PUBLIC_BASE}/{source_ref}"
+    return ""
+
+def _block_code_from_annotation_row(row: dict) -> str:
+    direct = (row.get("block_code") or row.get("block_type_code") or "").strip()
+    if direct:
+        return direct
+    nested = row.get("block_type")
+    if isinstance(nested, dict):
+        nested_code = (nested.get("code") or "").strip()
+        if nested_code:
+            return nested_code
+    return ""
+
+def _annotation_boxes_from_api_rows(rows: list) -> list:
+    boxes = []
+    for ann in rows or []:
+        try:
+            x1 = int(ann.get("x1"))
+            y1 = int(ann.get("y1"))
+            x2 = int(ann.get("x2"))
+            y2 = int(ann.get("y2"))
+        except Exception:
+            continue
+        boxes.append([x1, y1, x2, y2, _block_code_from_annotation_row(ann)])
+    return boxes
+
+def _safe_int_or_default(value, default: int) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+def _find_case_row_by_choice(cases_rows: list, case_choice: str) -> dict | None:
+    if not case_choice or not isinstance(cases_rows, list):
+        return None
+    parts = [p.strip() for p in str(case_choice).split("|")]
+    target_case_id = parts[1] if len(parts) >= 2 else ""
+    for row in cases_rows:
+        if _case_id_from_row(row) == target_case_id:
+            return row
+    return None
+
+def _format_case_choice(row: dict) -> str:
+    case_name = (row.get("case_name") or "case_sans_nom").strip()
+    case_id = _case_id_from_row(row) or "id_manquant"
+    doc_type = (row.get("doc_type") or "-").strip()
+    source_ref = (row.get("source_ref") or "-").strip()
+    return f"{case_name} | {case_id} | {doc_type} | {source_ref}"
+
+def refresh_existing_cases(limit: int = 2000):
+    rows = api_get("/cases", params={"limit": limit}) or []
+    cases_rows = [r for r in rows if isinstance(r, dict)]
+    choices = [_format_case_choice(r) for r in cases_rows]
+    if not choices:
+        return gr.update(choices=[], value=None), [], "Aucun cas existant trouve."
+    return (
+        gr.update(choices=choices, value=choices[0]),
+        cases_rows,
+        f"{len(choices)} cas charges. Selectionnez un cas puis cliquez sur Charger.",
+    )
+
 
 def load_image_and_prepare(url: str):
     """Loads image and returns (numpy_array, status_msg, pil_image_for_state, [], [])."""
@@ -439,6 +512,159 @@ def build_case_name(doc_id: str, page_no: int):
         return f"{doc_id.strip()}_p{int(page_no):04d}"
     return f"doc_unknown_p{int(page_no):04d}"
 
+def infer_is_humatheque_from_collection_code(collection_code: str):
+    code = (collection_code or "").strip().lower()
+    return code not in {"theses.fr", "dumas"}
+
+def load_existing_case(case_choice: str, campaign_choice: str, cases_rows: list):
+    row = _find_case_row_by_choice(cases_rows, case_choice)
+    if row is None:
+        return (
+            gr.skip(),
+            "Cas introuvable dans la liste actuelle. Rafraichissez la liste des cas.",
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+        )
+
+    case_id = _case_id_from_row(row)
+    image_url_val = _build_image_url_from_case(row)
+    if not image_url_val:
+        return (
+            gr.skip(),
+            f"Cas charge mais image introuvable pour case_id={case_id}.",
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+        )
+
+    img_array, img_status, clean_img, _, _ = load_image_and_prepare(image_url_val)
+    if clean_img is None:
+        return (
+            gr.skip(),
+            f"Echec chargement image du cas {case_id} : {img_status}",
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            image_url_val,
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+            gr.skip(),
+        )
+
+    campaign_id = ""
+    if campaign_choice:
+        try:
+            campaign_id = campaign_choice.split("|")[-1].strip()
+        except Exception:
+            campaign_id = ""
+    ann_params = {"case_id": case_id}
+    if campaign_id:
+        ann_params["campaign_id"] = campaign_id
+    try:
+        anns = api_get("/layout-annotations", params=ann_params) or []
+    except Exception:
+        anns = []
+    boxes = _annotation_boxes_from_api_rows(anns)
+    vis_img = draw_boxes_on_image(clean_img, boxes, None)
+
+    return (
+        vis_img if vis_img is not None else img_array,
+        f"{img_status} | Cas charge: {case_id} | {len(boxes)} annotation(s)",
+        clean_img,
+        boxes,
+        boxes,
+        None,
+        image_url_val,
+        row.get("doc_type"),
+        row.get("doc_id") or "",
+        row.get("collection_code") or "",
+        row.get("source_ref") or "",
+        bool(row.get("is_humatheque")) if row.get("is_humatheque") is not None else False,
+        _safe_int_or_default(row.get("page_no"), 1),
+        _safe_int_or_default(row.get("year"), 2000),
+        row.get("memoire_type_code"),
+        row.get("notes") or "",
+    )
+
+def save_metadata_only(
+    image_url: str,
+    image_with_boxes: Image.Image,
+    doc_type: str,
+    doc_id: str,
+    page_no: int,
+    year: int,
+    source_ref: str,
+    is_humatheque: bool,
+    collection_code: str,
+    memoire_type_code: str,
+    notes: str,
+):
+    if not doc_id and source_ref:
+        parsed = parse_image_metadata_from_ref(source_ref)
+        if parsed:
+            _, parsed_doc_id, _, _ = parsed
+            doc_id = parsed_doc_id
+
+    case_name = build_case_name(doc_id, page_no)
+    orig_w, orig_h = (None, None)
+    if image_with_boxes is not None:
+        orig_w, orig_h = image_with_boxes.size
+
+    case_payload = {
+        "case_name": case_name,
+        "doc_type": doc_type,
+        "doc_id": doc_id or None,
+        "page_no": int(page_no),
+        "year": int(year) if year else None,
+        "source_ref": source_ref or None,
+        "image_uri": image_url or None,
+        "image_sha256": None,
+        "notes": notes or None,
+        "is_humatheque": bool(is_humatheque) if is_humatheque is not None else None,
+        "collection_code": (collection_code or None),
+        "memoire_type_code": (memoire_type_code or None),
+        "image_width": int(orig_w) if orig_w else None,
+        "image_height": int(orig_h) if orig_h else None,
+    }
+    try:
+        case_id = api_post("/cases/upsert", case_payload)
+        return f"Metadonnees mises a jour pour le cas '{case_name}'.", json.dumps({"case_id": case_id}, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Erreur pendant la mise a jour des metadonnees : {e}", None
+
 
 def save_annotations(
     image_url: str,
@@ -450,10 +676,10 @@ def save_annotations(
     doc_id: str,
     page_no: int,
     year: int,
-    language: str,
     source_ref: str,
     is_humatheque: bool,
     collection_code: str,
+    memoire_type_code: str,
     notes: str,
 ):
     """
@@ -480,10 +706,11 @@ def save_annotations(
     # Upsert case
     case_payload = {
         "case_name": case_name, "doc_type": doc_type, "doc_id": doc_id or None,
-        "page_no": int(page_no), "year": int(year) if year else None, "language": language or None,
+        "page_no": int(page_no), "year": int(year) if year else None,
         "source_ref": source_ref or None, "image_uri": image_url, "image_sha256": None, "notes": notes or None,
         "is_humatheque": bool(is_humatheque) if is_humatheque is not None else None,
         "collection_code": (collection_code or None),
+        "memoire_type_code": (memoire_type_code or None),
         "image_width": int(orig_w),
         "image_height": int(orig_h),
     }
@@ -710,6 +937,19 @@ def make_app():
             clean_img_state = gr.State()
             pending_point_state = gr.State()
             annotations_state = gr.State([])
+            existing_cases_state = gr.State([])
+
+            with gr.Accordion("Annotations existantes", open=False):
+                with gr.Row():
+                    existing_case_choice = gr.Dropdown(
+                        label="Cas deja enregistres",
+                        choices=[],
+                        value=None,
+                        scale=6,
+                    )
+                    refresh_cases_btn = gr.Button("Rafraichir les cas", scale=1)
+                    load_case_btn = gr.Button("Charger le cas", scale=1, variant="secondary")
+                existing_cases_status = gr.Markdown("")
 
             with gr.Row():
                 image_url = gr.Textbox(
@@ -797,16 +1037,21 @@ def make_app():
                             doc_id = gr.Textbox(
                                 label="Identifiant du document",
                                 placeholder="123456789",
-                            )
-                        page_no = gr.Number(label="Numero de page", value=1, precision=0)
+                            )                       
                         with gr.Row():
                             year = gr.Number(label="Annee", value=2000, precision=0)
-                            language = gr.Textbox(label="Langue", value="fr")
+                            page_no = gr.Number(label="Numero de page", value=1, precision=0)
                         is_humatheque = gr.Checkbox(label="Humatheque ?", value=False)
-                        collection_code = gr.Textbox(
-                            label="Code de collection",
-                            placeholder="Ex : EPHE / theses.fr ...",
-                        )                      
+                        with gr.Row():
+                            collection_code = gr.Textbox(
+                                label="Code de collection",
+                                placeholder="Ex : EPHE / theses.fr ...",
+                            )
+                            memoire_type_code = gr.Dropdown(
+                                label="Type de mémoire",
+                                choices=[(label, code) for code, label in MEMOIRE_TYPE_OPTIONS.items()],
+                                value=None,
+                            )
 
                     with gr.Column():
                         gr.Markdown("#### Source du document / 2")                       
@@ -821,7 +1066,9 @@ def make_app():
                             placeholder="Notes complementaires sur cette annotation...",
                         )
 
-            save_btn = gr.Button("Enregistrer tous les rectangles", variant="primary")
+            with gr.Row():
+                save_btn = gr.Button("Enregistrer tous les rectangles", variant="primary")
+                save_meta_btn = gr.Button("Mettre a jour uniquement les metadonnees", variant="secondary")
 
             with gr.Accordion("Reponse API", open=False):
                 out_msg = gr.Textbox(label="Statut", lines=2, interactive=False)
@@ -832,10 +1079,43 @@ def make_app():
             fn=refresh_tree,
             outputs=[file_explorer, tree_status],
         )
+        
+        demo.load(
+            fn=refresh_existing_cases,
+            outputs=[existing_case_choice, existing_cases_state, existing_cases_status],
+        )
 
         refresh_tree_btn.click(
             fn=refresh_tree,
             outputs=[file_explorer, tree_status],
+        )
+        
+        refresh_cases_btn.click(
+            fn=refresh_existing_cases,
+            outputs=[existing_case_choice, existing_cases_state, existing_cases_status],
+        )
+
+        load_case_btn.click(
+            fn=load_existing_case,
+            inputs=[existing_case_choice, campaign, existing_cases_state],
+            outputs=[
+                img,
+                status,
+                clean_img_state,
+                annotations_state,
+                box_display,
+                pending_point_state,
+                image_url,
+                doc_type,
+                doc_id,
+                collection_code,
+                source_ref,
+                is_humatheque,
+                page_no,
+                year,
+                memoire_type_code,
+                notes,
+            ],
         )
 
         file_explorer.change(
@@ -895,6 +1175,12 @@ def make_app():
             inputs=[auto_metadata, image_url],
             outputs=[doc_type, doc_id, collection_code, source_ref],
         )
+        
+        collection_code.change(
+            fn=infer_is_humatheque_from_collection_code,
+            inputs=[collection_code],
+            outputs=[is_humatheque],
+        )
 
         img.select(
             fn=on_image_select,
@@ -931,7 +1217,16 @@ def make_app():
             fn=save_annotations,
             inputs=[
                 image_url, clean_img_state, annotations_state, campaign, # Use clean_img_state instead of img
-                doc_type, doc_id, page_no, year, language, source_ref, is_humatheque, collection_code, notes
+                doc_type, doc_id, page_no, year, source_ref, is_humatheque, collection_code, memoire_type_code, notes
+            ],
+            outputs=[out_msg, out_json],
+        )
+        
+        save_meta_btn.click(
+            fn=save_metadata_only,
+            inputs=[
+                image_url, clean_img_state,
+                doc_type, doc_id, page_no, year, source_ref, is_humatheque, collection_code, memoire_type_code, notes
             ],
             outputs=[out_msg, out_json],
         )
