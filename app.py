@@ -78,6 +78,7 @@ MEMOIRE_TYPE_OPTIONS = {
     "master": "Mémoire de master",
     "hdr": "HDR",
     "autres": "Autres",
+    "undefined": "Indeterminé",
 }
 
 # -----------------------
@@ -429,13 +430,55 @@ def refresh_existing_cases(limit: int = 2000):
     rows = api_get("/cases", params={"limit": limit}) or []
     cases_rows = [r for r in rows if isinstance(r, dict)]
     choices = [_format_case_choice(r) for r in cases_rows]
+    memoire_choices = [
+        _format_case_choice(r)
+        for r in cases_rows
+        if (r.get("doc_type") or "").strip() == "memoire" and not (r.get("memoire_type_code") or "").strip()
+    ]
     if not choices:
-        return gr.update(choices=[], value=None), [], "Aucun cas existant trouve."
+        return (
+            gr.update(choices=[], value=None),
+            gr.update(choices=[], value=None),
+            [],
+            "Aucun cas existant trouve.",
+            "Aucun memoire sans type trouve.",
+        )
     return (
         gr.update(choices=choices, value=choices[0]),
+        gr.update(choices=memoire_choices, value=memoire_choices[0] if memoire_choices else None),
         cases_rows,
         f"{len(choices)} cas charges. Selectionnez un cas puis cliquez sur Charger.",
+        (
+            f"{len(memoire_choices)} memoire(s) sans type charges. "
+            "Selectionnez un cas puis cliquez sur Charger."
+            if memoire_choices
+            else "Aucun memoire sans type trouve."
+        ),
     )
+
+
+def update_memoire_type_visibility(doc_type_value: str, current_memoire_type_code: str | None = None):
+    is_memoire = (doc_type_value or "").strip() == "memoire"
+    return gr.update(visible=is_memoire, value=current_memoire_type_code if is_memoire else None)
+
+
+def update_save_buttons(is_existing_case: bool):
+    return gr.update(visible=not is_existing_case), gr.update(visible=bool(is_existing_case))
+
+
+def set_existing_case_mode():
+    return True
+
+
+def set_new_annotation_mode():
+    return False
+
+
+def normalize_memoire_type_code(doc_type: str, memoire_type_code: str | None):
+    if (doc_type or "").strip() != "memoire":
+        return None
+    normalized = (memoire_type_code or "").strip()
+    return normalized or None
 
 
 def load_image_and_prepare(url: str):
@@ -646,6 +689,7 @@ def save_metadata_only(
         if parsed:
             _, parsed_doc_id, _, _ = parsed
             doc_id = parsed_doc_id
+    memoire_type_code = normalize_memoire_type_code(doc_type, memoire_type_code)
 
     case_name = build_case_name(doc_id, page_no)
     orig_w, orig_h = (None, None)
@@ -664,7 +708,7 @@ def save_metadata_only(
         "notes": notes or None,
         "is_humatheque": bool(is_humatheque) if is_humatheque is not None else None,
         "collection_code": (collection_code or None),
-        "memoire_type_code": (memoire_type_code or None),
+        "memoire_type_code": memoire_type_code,
         "image_width": int(orig_w) if orig_w else None,
         "image_height": int(orig_h) if orig_h else None,
     }
@@ -706,6 +750,7 @@ def save_annotations(
         campaign_id = campaign_choice.split("|")[-1].strip()
     except Exception:
         return "Format de campagne invalide.", None
+    memoire_type_code = normalize_memoire_type_code(doc_type, memoire_type_code)
 
     case_name = build_case_name(doc_id, page_no)
 
@@ -719,7 +764,7 @@ def save_annotations(
         "source_ref": source_ref or None, "image_uri": image_url, "image_sha256": None, "notes": notes or None,
         "is_humatheque": bool(is_humatheque) if is_humatheque is not None else None,
         "collection_code": (collection_code or None),
-        "memoire_type_code": (memoire_type_code or None),
+        "memoire_type_code": memoire_type_code,
         "image_width": int(orig_w),
         "image_height": int(orig_h),
     }
@@ -906,6 +951,21 @@ def make_app():
       background: #fbfdff;
       padding: 10px;
     }
+    .highlight-accordion {
+      border: 1px solid #f3d7b1;
+      border-radius: 12px;
+      background: #fffaf3;
+      margin-bottom: 10px;
+      overflow: hidden;
+    }
+    .highlight-accordion > div[role="button"] {
+      background: #fff1dc;
+      border-bottom: 1px solid #f3d7b1;
+    }
+    .highlight-accordion > div[role="button"] span {
+      color: #9a5a12;
+      font-weight: 600;
+    }
     """
     if MINIO_ENABLED and minio_client is not None:
         try:
@@ -933,13 +993,13 @@ def make_app():
                 </div>
                 """
             )
-            with gr.Accordion("Guide d'utilisation", open=False):
+            with gr.Accordion("Guide d'utilisation", open=False, elem_classes=["highlight-accordion"]):
                 gr.Markdown(
-                    "- Renseignez une URL d'image ou choisissez un fichier dans l'arborescence MinIO.\n"
-                    "- Cliquez deux fois sur l'image pour creer une boite (coin 1 puis coin 2).\n"
-                    "- Selectionnez une ligne du tableau pour modifier son label avec la liste deroulante.\n"
-                    "- Verifiez les metadonnees (campagne, document, page, langue, source, collection).\n"
-                    "- Cliquez sur **Enregistrer tous les rectangles** pour envoyer le cas et les annotations a l'API."
+                    "- Choisissez un fichier dans l'arborescence MinIO (ou optionnellement renseignez une URL d'image).\n"
+                    "- Pour reprendre un travail existant, utilisez **Annotations existantes** ; pour cibler les mémoires sans type, utilisez **Annotations existantes - Mémoires sans type**.\n"
+                    "- Cliquez deux fois sur l'image pour créer une boite (coin 1 puis coin 2), puis sélectionnez une ligne du tableau pour assigner son label.\n"
+                    "- Le champ **Type de mémoire** n'apparait que si **Type de document** vaut `memoire` ; pour les autres types il reste vide.\n"
+                    "- Si vous chargez un cas existant, seul le bouton de mise à jour des métadonnées est affiché ; pour une nouvelle image, seul le bouton d'enregistrement de l'annotation est affiché."
                 )
 
             # States
@@ -947,8 +1007,9 @@ def make_app():
             pending_point_state = gr.State()
             annotations_state = gr.State([])
             existing_cases_state = gr.State([])
+            is_existing_case_state = gr.State(False)
 
-            with gr.Accordion("Annotations existantes", open=False):
+            with gr.Accordion("Annotations existantes", open=False, elem_classes=["highlight-accordion"]):
                 with gr.Row():
                     existing_case_choice = gr.Dropdown(
                         label="Cas deja enregistres",
@@ -959,6 +1020,17 @@ def make_app():
                     refresh_cases_btn = gr.Button("Rafraichir les cas", scale=1)
                     load_case_btn = gr.Button("Charger le cas", scale=1, variant="secondary")
                 existing_cases_status = gr.Markdown("")
+            with gr.Accordion("Annotations existantes - Mémoires sans type", open=False, elem_classes=["highlight-accordion"]):
+                with gr.Row():
+                    memoire_case_choice = gr.Dropdown(
+                        label="Memoires sans type",
+                        choices=[],
+                        value=None,
+                        scale=6,
+                    )
+                    refresh_memoire_cases_btn = gr.Button("Rafraichir les cas", scale=1)
+                    load_memoire_case_btn = gr.Button("Charger le cas", scale=1, variant="secondary")
+                memoire_cases_status = gr.Markdown("")
 
             with gr.Row():
                 image_url = gr.Textbox(
@@ -1022,7 +1094,7 @@ def make_app():
                                 "- Les nouvelles boites utilisent le label courant."
                             )
 
-            with gr.Accordion("Metadonnees", open=True):
+            with gr.Accordion("Metadonnees", open=True, elem_classes=["highlight-accordion"]):
                 gr.Markdown("## Métadonnées")
                 campaign = gr.Dropdown(
                     label="Campagne",
@@ -1060,6 +1132,7 @@ def make_app():
                                 label="Type de mémoire",
                                 choices=[(label, code) for code, label in MEMOIRE_TYPE_OPTIONS.items()],
                                 value=None,
+                                visible=False,
                             )
 
                     with gr.Column():
@@ -1076,10 +1149,10 @@ def make_app():
                         )
 
             with gr.Row():
-                save_btn = gr.Button("Enregistrer tous les rectangles", variant="primary")
-                save_meta_btn = gr.Button("Mettre a jour uniquement les metadonnees", variant="secondary")
+                save_btn = gr.Button("Enregistrer une nouvelle annotation", variant="primary", visible=True)
+                save_meta_btn = gr.Button("Mettre a jour cette annotation existante", variant="secondary", visible=False)
 
-            with gr.Accordion("Reponse API", open=False):
+            with gr.Accordion("Reponse API", open=False, elem_classes=["highlight-accordion"]):
                 out_msg = gr.Textbox(label="Statut", lines=2, interactive=False)
                 out_json = gr.Code(label="Annotations enregistrees (JSON)", language="json")
 
@@ -1091,7 +1164,13 @@ def make_app():
         
         demo.load(
             fn=refresh_existing_cases,
-            outputs=[existing_case_choice, existing_cases_state, existing_cases_status],
+            outputs=[
+                existing_case_choice,
+                memoire_case_choice,
+                existing_cases_state,
+                existing_cases_status,
+                memoire_cases_status,
+            ],
         )
 
         refresh_tree_btn.click(
@@ -1101,7 +1180,24 @@ def make_app():
         
         refresh_cases_btn.click(
             fn=refresh_existing_cases,
-            outputs=[existing_case_choice, existing_cases_state, existing_cases_status],
+            outputs=[
+                existing_case_choice,
+                memoire_case_choice,
+                existing_cases_state,
+                existing_cases_status,
+                memoire_cases_status,
+            ],
+        )
+
+        refresh_memoire_cases_btn.click(
+            fn=refresh_existing_cases,
+            outputs=[
+                existing_case_choice,
+                memoire_case_choice,
+                existing_cases_state,
+                existing_cases_status,
+                memoire_cases_status,
+            ],
         )
 
         load_case_btn.click(
@@ -1125,6 +1221,51 @@ def make_app():
                 memoire_type_code,
                 notes,
             ],
+        ).then(
+            fn=set_existing_case_mode,
+            outputs=[is_existing_case_state],
+        ).then(
+            fn=update_save_buttons,
+            inputs=[is_existing_case_state],
+            outputs=[save_btn, save_meta_btn],
+        ).then(
+            fn=update_memoire_type_visibility,
+            inputs=[doc_type, memoire_type_code],
+            outputs=[memoire_type_code],
+        )
+
+        load_memoire_case_btn.click(
+            fn=load_existing_case,
+            inputs=[memoire_case_choice, campaign, existing_cases_state],
+            outputs=[
+                img,
+                status,
+                clean_img_state,
+                annotations_state,
+                box_display,
+                pending_point_state,
+                image_url,
+                doc_type,
+                doc_id,
+                collection_code,
+                source_ref,
+                is_humatheque,
+                page_no,
+                year,
+                memoire_type_code,
+                notes,
+            ],
+        ).then(
+            fn=set_existing_case_mode,
+            outputs=[is_existing_case_state],
+        ).then(
+            fn=update_save_buttons,
+            inputs=[is_existing_case_state],
+            outputs=[save_btn, save_meta_btn],
+        ).then(
+            fn=update_memoire_type_visibility,
+            inputs=[doc_type, memoire_type_code],
+            outputs=[memoire_type_code],
         )
 
         file_explorer.change(
@@ -1143,6 +1284,17 @@ def make_app():
                 collection_code,
                 source_ref,
             ],
+        ).then(
+            fn=set_new_annotation_mode,
+            outputs=[is_existing_case_state],
+        ).then(
+            fn=update_save_buttons,
+            inputs=[is_existing_case_state],
+            outputs=[save_btn, save_meta_btn],
+        ).then(
+            fn=update_memoire_type_visibility,
+            inputs=[doc_type, memoire_type_code],
+            outputs=[memoire_type_code],
         )
         
         file_explorer.select(
@@ -1161,6 +1313,17 @@ def make_app():
                 collection_code,
                 source_ref,
             ],
+        ).then(
+            fn=set_new_annotation_mode,
+            outputs=[is_existing_case_state],
+        ).then(
+            fn=update_save_buttons,
+            inputs=[is_existing_case_state],
+            outputs=[save_btn, save_meta_btn],
+        ).then(
+            fn=update_memoire_type_visibility,
+            inputs=[doc_type, memoire_type_code],
+            outputs=[memoire_type_code],
         )
 
         load_btn.click(
@@ -1177,12 +1340,33 @@ def make_app():
                 collection_code,
                 source_ref,
             ],
+        ).then(
+            fn=set_new_annotation_mode,
+            outputs=[is_existing_case_state],
+        ).then(
+            fn=update_save_buttons,
+            inputs=[is_existing_case_state],
+            outputs=[save_btn, save_meta_btn],
+        ).then(
+            fn=update_memoire_type_visibility,
+            inputs=[doc_type, memoire_type_code],
+            outputs=[memoire_type_code],
         )
 
         auto_metadata.change(
             fn=on_auto_metadata_toggle,
             inputs=[auto_metadata, image_url],
             outputs=[doc_type, doc_id, collection_code, source_ref],
+        ).then(
+            fn=update_memoire_type_visibility,
+            inputs=[doc_type, memoire_type_code],
+            outputs=[memoire_type_code],
+        )
+
+        doc_type.change(
+            fn=update_memoire_type_visibility,
+            inputs=[doc_type, memoire_type_code],
+            outputs=[memoire_type_code],
         )
         
         collection_code.change(
