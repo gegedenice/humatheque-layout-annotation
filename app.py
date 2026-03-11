@@ -102,6 +102,26 @@ def api_post(path: str, payload: dict):
 
 
 # -----------------------
+# API helpers
+# -----------------------
+headers = {
+  "X-API-Key": API_KEY,
+  "Accept": "application/json",
+  "Content-Type": "application/json",
+}
+
+def api_get(path: str, params=None):
+    r = requests.get(f"{API_BASE}{path}", params=params, timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+def api_post(path: str, payload: dict):
+    r = requests.post(f"{API_BASE}{path}", json=payload, headers=headers, timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+
+# -----------------------
 # Image helpers
 # -----------------------
 def fetch_image(url: str) -> Image.Image:
@@ -674,6 +694,8 @@ def load_existing_case(case_choice: str, campaign_choice: str, cases_rows: list)
 def save_metadata_only(
     image_url: str,
     image_with_boxes: Image.Image,
+    annotations: list,
+    campaign_choice: str,
     doc_type: str,
     doc_id: str,
     page_no: int,
@@ -714,9 +736,49 @@ def save_metadata_only(
     }
     try:
         case_id = api_post("/cases/upsert", case_payload)
-        return f"Metadonnees mises a jour pour le cas '{case_name}'.", json.dumps({"case_id": case_id}, ensure_ascii=False, indent=2)
     except Exception as e:
         return f"Erreur pendant la mise a jour des metadonnees : {e}", None
+
+    rects = annotations if isinstance(annotations, list) else []
+    if not campaign_choice:
+        return f"Metadonnees mises a jour pour le cas '{case_name}'.", json.dumps({"case_id": case_id}, ensure_ascii=False, indent=2)
+
+    try:
+        campaign_id = campaign_choice.split("|")[-1].strip()
+    except Exception:
+        return "Format de campagne invalide.", None
+
+    replace_payload = {
+        "campaign_id": campaign_id,
+        "case_id": case_id,
+        "annotations": [
+            {
+                "block_code": block_code,
+                "x1": int(x_min),
+                "y1": int(y_min),
+                "x2": int(x_max),
+                "y2": int(y_max),
+                "source": "manual",
+                "notes": None,
+            }
+            for x_min, y_min, x_max, y_max, block_code in rects
+            if block_code
+        ],
+    }
+    try:
+        saved = api_post("/layout-annotations/replace", replace_payload)
+    except Exception as e:
+        return f"Metadonnees mises a jour, mais echec de synchronisation des annotations : {e}", None
+
+    try:
+        anns = api_get("/layout-annotations", params={"campaign_id": campaign_id, "case_id": case_id})
+    except Exception as e:
+        return f"Metadonnees et annotations mises a jour ({saved}), mais echec de recuperation : {e}", case_id
+
+    return (
+        f"Cas '{case_name}' mis a jour ({saved} annotation(s) synchronisee(s)).",
+        json.dumps(anns, ensure_ascii=False, indent=2),
+    )
 
 
 def save_annotations(
@@ -778,33 +840,28 @@ def save_annotations(
         return "Aucun rectangle detecte. Dessinez au moins une boite.", case_id
     sx, sy = 1.0, 1.0  # Assume no scaling for now
 
-    saved, errors = 0, 0
-    # Iterate through each annotation, which now includes its block_code
-    for box_data in rects:
-        x_min, y_min, x_max, y_max, individual_block_code = box_data
-        
-        # Ensure individual_block_code is not empty
-        if not individual_block_code:
-            errors += 1
-            continue
-
-        payload = {
-            "campaign_id": campaign_id,
-            "case_id": case_id,
-            "block_code": individual_block_code, # Use individual_block_code for this box
-            "x1": int(x_min * sx),
-            "y1": int(y_min * sy),
-            "x2": int(x_max * sx),
-            "y2": int(y_max * sy),
-            "source": "manual",
-            "annotator": None,
-            "notes": None, # Case notes are global, not per-annotation
-        }
-        try:
-            api_post("/layout-annotations", payload)
-            saved += 1
-        except Exception:
-            errors += 1
+    replace_payload = {
+        "campaign_id": campaign_id,
+        "case_id": case_id,
+        "annotations": [
+            {
+                "block_code": individual_block_code,
+                "x1": int(x_min * sx),
+                "y1": int(y_min * sy),
+                "x2": int(x_max * sx),
+                "y2": int(y_max * sy),
+                "source": "manual",
+                "notes": None,
+            }
+            for x_min, y_min, x_max, y_max, individual_block_code in rects
+            if individual_block_code
+        ],
+    }
+    errors = len(rects) - len(replace_payload["annotations"])
+    try:
+        saved = api_post("/layout-annotations/replace", replace_payload)
+    except Exception as e:
+        return f"Erreur pendant l'enregistrement des annotations : {e}", None
 
     try:
         anns = api_get("/layout-annotations", params={"campaign_id": campaign_id, "case_id": case_id})
@@ -1018,7 +1075,7 @@ def make_app():
                         scale=6,
                     )
                     load_case_btn = gr.Button("Charger le cas", scale=1, variant="primary")
-                    refresh_cases_btn = gr.Button("Rafraichir les cas", scale=1, variant="neutral")                    
+                    refresh_cases_btn = gr.Button("Rafraichir les cas", scale=1, variant="neutral")                   
                 existing_cases_status = gr.Markdown("")
             with gr.Accordion("Annotations existantes - Mémoires sans type", open=False, elem_classes=["highlight-accordion"]):
                 with gr.Row():
@@ -1029,7 +1086,7 @@ def make_app():
                         scale=6,
                     )
                     load_memoire_case_btn = gr.Button("Charger le cas", scale=1, variant="primary")
-                    refresh_memoire_cases_btn = gr.Button("Rafraichir les cas", scale=1, variant="neutral")                   
+                    refresh_memoire_cases_btn = gr.Button("Rafraichir les cas", scale=1, variant="neutral")                    
                 memoire_cases_status = gr.Markdown("")
 
             with gr.Row():
@@ -1150,7 +1207,7 @@ def make_app():
 
             with gr.Row():
                 save_btn = gr.Button("Enregistrer une nouvelle annotation", variant="primary", visible=True)
-                save_meta_btn = gr.Button("Mettre à jour cette annotation existante", variant="primary", visible=False)
+                save_meta_btn = gr.Button("Mettre à jour ce cas", variant="primary", visible=False)
 
             with gr.Accordion("Reponse API", open=False, elem_classes=["highlight-accordion"]):
                 out_msg = gr.Textbox(label="Statut", lines=2, interactive=False)
@@ -1418,7 +1475,7 @@ def make_app():
         save_meta_btn.click(
             fn=save_metadata_only,
             inputs=[
-                image_url, clean_img_state,
+                image_url, clean_img_state, annotations_state, campaign,
                 doc_type, doc_id, page_no, year, source_ref, is_humatheque, collection_code, memoire_type_code, notes
             ],
             outputs=[out_msg, out_json],
