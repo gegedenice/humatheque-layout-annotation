@@ -102,26 +102,6 @@ def api_post(path: str, payload: dict):
 
 
 # -----------------------
-# API helpers
-# -----------------------
-headers = {
-  "X-API-Key": API_KEY,
-  "Accept": "application/json",
-  "Content-Type": "application/json",
-}
-
-def api_get(path: str, params=None):
-    r = requests.get(f"{API_BASE}{path}", params=params, timeout=30)
-    r.raise_for_status()
-    return r.json()
-
-def api_post(path: str, payload: dict):
-    r = requests.post(f"{API_BASE}{path}", json=payload, headers=headers, timeout=30)
-    r.raise_for_status()
-    return r.json()
-
-
-# -----------------------
 # Image helpers
 # -----------------------
 def fetch_image(url: str) -> Image.Image:
@@ -446,6 +426,35 @@ def _format_case_choice(row: dict) -> str:
     source_ref = (row.get("source_ref") or "-").strip()
     return f"{case_name} | {case_id} | {doc_type} | {source_ref}"
 
+def filter_existing_case_choices(source_ref_query: str, cases_rows: list):
+    query = (source_ref_query or "").strip().lower()
+    if not isinstance(cases_rows, list):
+        return gr.update(choices=[], value=None), "Aucun cas existant trouve."
+
+    filtered_rows = []
+    for row in cases_rows:
+        if not isinstance(row, dict):
+            continue
+        source_ref = str(row.get("source_ref") or "").strip().lower()
+        if not query or query in source_ref:
+            filtered_rows.append(row)
+
+    choices = [_format_case_choice(r) for r in filtered_rows]
+    if not choices:
+        if query:
+            return (
+                gr.update(choices=[], value=None),
+                f"Aucun cas trouve pour le filtre source_ref '{source_ref_query}'.",
+            )
+        return gr.update(choices=[], value=None), "Aucun cas existant trouve."
+
+    status = (
+        f"{len(choices)} cas correspondant(s) au filtre source_ref '{source_ref_query}'."
+        if query
+        else f"{len(choices)} cas charges. Selectionnez un cas puis cliquez sur Charger."
+    )
+    return gr.update(choices=choices, value=choices[0]), status
+
 def refresh_existing_cases(limit: int = 2000):
     rows = api_get("/cases", params={"limit": limit}) or []
     cases_rows = [r for r in rows if isinstance(r, dict)]
@@ -460,6 +469,7 @@ def refresh_existing_cases(limit: int = 2000):
             gr.update(choices=[], value=None),
             gr.update(choices=[], value=None),
             [],
+            gr.update(value=""),
             "Aucun cas existant trouve.",
             "Aucun memoire sans type trouve.",
         )
@@ -467,6 +477,7 @@ def refresh_existing_cases(limit: int = 2000):
         gr.update(choices=choices, value=choices[0]),
         gr.update(choices=memoire_choices, value=memoire_choices[0] if memoire_choices else None),
         cases_rows,
+        gr.update(value=""),
         f"{len(choices)} cas charges. Selectionnez un cas puis cliquez sur Charger.",
         (
             f"{len(memoire_choices)} memoire(s) sans type charges. "
@@ -1068,11 +1079,17 @@ def make_app():
 
             with gr.Accordion("Annotations existantes", open=False, elem_classes=["highlight-accordion"]):
                 with gr.Row():
+                    existing_case_search = gr.Textbox(
+                        label="Filtrer par source_ref",
+                        placeholder="Ex. memoires/CRALMI ou CRALMI",
+                        value="",
+                        scale=3,
+                    )
                     existing_case_choice = gr.Dropdown(
                         label="Cas deja enregistres",
                         choices=[],
                         value=None,
-                        scale=6,
+                        scale=4,
                     )
                     load_case_btn = gr.Button("Charger le cas", scale=1, variant="primary")
                     refresh_cases_btn = gr.Button("Rafraichir les cas", scale=1, variant="neutral")                   
@@ -1225,6 +1242,7 @@ def make_app():
                 existing_case_choice,
                 memoire_case_choice,
                 existing_cases_state,
+                existing_case_search,
                 existing_cases_status,
                 memoire_cases_status,
             ],
@@ -1241,6 +1259,7 @@ def make_app():
                 existing_case_choice,
                 memoire_case_choice,
                 existing_cases_state,
+                existing_case_search,
                 existing_cases_status,
                 memoire_cases_status,
             ],
@@ -1252,9 +1271,16 @@ def make_app():
                 existing_case_choice,
                 memoire_case_choice,
                 existing_cases_state,
+                existing_case_search,
                 existing_cases_status,
                 memoire_cases_status,
             ],
+        )
+
+        existing_case_search.input(
+            fn=filter_existing_case_choices,
+            inputs=[existing_case_search, existing_cases_state],
+            outputs=[existing_case_choice, existing_cases_status],
         )
 
         load_case_btn.click(
