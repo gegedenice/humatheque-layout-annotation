@@ -227,6 +227,7 @@ def load_image_from_tree(selected_path=None, auto_metadata=True, evt: gr.SelectD
         doc_id_val=gr.skip(),
         collection_code_val=gr.skip(),
         source_ref_val=gr.skip(),
+        case_id_val=None,
     ):
         if anns_val is None:
             anns_val = []
@@ -244,6 +245,7 @@ def load_image_from_tree(selected_path=None, auto_metadata=True, evt: gr.SelectD
             doc_id_val,
             collection_code_val,
             source_ref_val,
+            case_id_val,
         )
 
     if isinstance(selected_path, bool) and evt is not None and getattr(evt, "value", None):
@@ -580,6 +582,7 @@ def load_image_and_prepare_with_metadata(url: str, auto_metadata: bool):
         doc_id_val,
         collection_code_val,
         source_ref_val,
+        None,
     )
 
 
@@ -619,7 +622,7 @@ def load_existing_case(case_choice: str, campaign_choice: str, cases_rows: list)
             gr.skip(),
             gr.skip(),
             gr.skip(),
-            gr.skip(),
+            None,
         )
 
     case_id = _case_id_from_row(row)
@@ -642,7 +645,7 @@ def load_existing_case(case_choice: str, campaign_choice: str, cases_rows: list)
             gr.skip(),
             gr.skip(),
             gr.skip(),
-            gr.skip(),
+            None,
         )
 
     img_array, img_status, clean_img, _, _ = load_image_and_prepare(image_url_val)
@@ -664,7 +667,7 @@ def load_existing_case(case_choice: str, campaign_choice: str, cases_rows: list)
             gr.skip(),
             gr.skip(),
             gr.skip(),
-            gr.skip(),
+            None,
         )
 
     campaign_id = ""
@@ -700,6 +703,7 @@ def load_existing_case(case_choice: str, campaign_choice: str, cases_rows: list)
         _safe_int_or_default(row.get("year"), 2000),
         row.get("memoire_type_code"),
         row.get("notes") or "",
+        case_id or None,
     )
 
 def save_metadata_only(
@@ -707,6 +711,7 @@ def save_metadata_only(
     image_with_boxes: Image.Image,
     annotations: list,
     campaign_choice: str,
+    case_id: str | None,
     doc_type: str,
     doc_id: str,
     page_no: int,
@@ -730,6 +735,7 @@ def save_metadata_only(
         orig_w, orig_h = image_with_boxes.size
 
     case_payload = {
+        "case_id": case_id or None,
         "case_name": case_name,
         "doc_type": doc_type,
         "doc_id": doc_id or None,
@@ -797,6 +803,7 @@ def save_annotations(
     image_with_boxes: Image.Image,
     annotations: list, # Now contains [x1, y1, x2, y2, block_code]
     campaign_choice: str,
+    case_id: str | None,
     # block_choice: str, # No longer needed here, taken from individual annotations
     doc_type: str,
     doc_id: str,
@@ -832,6 +839,7 @@ def save_annotations(
 
     # Upsert case
     case_payload = {
+        "case_id": case_id or None,
         "case_name": case_name, "doc_type": doc_type, "doc_id": doc_id or None,
         "page_no": int(page_no), "year": int(year) if year else None,
         "source_ref": source_ref or None, "image_uri": image_url, "image_sha256": None, "notes": notes or None,
@@ -1076,6 +1084,7 @@ def make_app():
             annotations_state = gr.State([])
             existing_cases_state = gr.State([])
             is_existing_case_state = gr.State(False)
+            current_case_id_state = gr.State(None)
 
             with gr.Accordion("Annotations existantes", open=False, elem_classes=["highlight-accordion"]):
                 with gr.Row():
@@ -1303,6 +1312,7 @@ def make_app():
                 year,
                 memoire_type_code,
                 notes,
+                current_case_id_state,
             ],
         ).then(
             fn=set_existing_case_mode,
@@ -1337,6 +1347,7 @@ def make_app():
                 year,
                 memoire_type_code,
                 notes,
+                current_case_id_state,
             ],
         ).then(
             fn=set_existing_case_mode,
@@ -1366,6 +1377,7 @@ def make_app():
                 doc_id,
                 collection_code,
                 source_ref,
+                current_case_id_state,
             ],
         ).then(
             fn=set_new_annotation_mode,
@@ -1395,6 +1407,7 @@ def make_app():
                 doc_id,
                 collection_code,
                 source_ref,
+                current_case_id_state,
             ],
         ).then(
             fn=set_new_annotation_mode,
@@ -1422,6 +1435,7 @@ def make_app():
                 doc_id,
                 collection_code,
                 source_ref,
+                current_case_id_state,
             ],
         ).then(
             fn=set_new_annotation_mode,
@@ -1492,7 +1506,7 @@ def make_app():
         save_btn.click(
             fn=save_annotations,
             inputs=[
-                image_url, clean_img_state, annotations_state, campaign, # Use clean_img_state instead of img
+                image_url, clean_img_state, annotations_state, campaign, current_case_id_state, # Use clean_img_state instead of img
                 doc_type, doc_id, page_no, year, source_ref, is_humatheque, collection_code, memoire_type_code, notes
             ],
             outputs=[out_msg, out_json],
@@ -1501,7 +1515,7 @@ def make_app():
         save_meta_btn.click(
             fn=save_metadata_only,
             inputs=[
-                image_url, clean_img_state, annotations_state, campaign,
+                image_url, clean_img_state, annotations_state, campaign, current_case_id_state,
                 doc_type, doc_id, page_no, year, source_ref, is_humatheque, collection_code, memoire_type_code, notes
             ],
             outputs=[out_msg, out_json],
