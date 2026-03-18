@@ -80,7 +80,25 @@ MEMOIRE_TYPE_OPTIONS = {
     "autres": "Autres",
     "undefined": "Indeterminé",
 }
+# -----------------------
+# API helpers
+# -----------------------
+headers = {
+  "X-API-Key": API_KEY,
+  "Accept": "application/json",
+  "Content-Type": "application/json",
+}
 
+def api_get(path: str, params=None):
+    r = requests.get(f"{API_BASE}{path}", params=params, timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+def api_post(path: str, payload: dict):
+    r = requests.post(f"{API_BASE}{path}", json=payload, headers=headers, timeout=30)
+    r.raise_for_status()
+    return r.json()
+    
 # -----------------------
 # Image helpers
 # -----------------------
