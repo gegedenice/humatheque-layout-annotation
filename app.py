@@ -82,26 +82,6 @@ MEMOIRE_TYPE_OPTIONS = {
 }
 
 # -----------------------
-# API helpers
-# -----------------------
-headers = {
-  "X-API-Key": API_KEY,
-  "Accept": "application/json",
-  "Content-Type": "application/json",
-}
-
-def api_get(path: str, params=None):
-    r = requests.get(f"{API_BASE}{path}", params=params, timeout=30)
-    r.raise_for_status()
-    return r.json()
-
-def api_post(path: str, payload: dict):
-    r = requests.post(f"{API_BASE}{path}", json=payload, headers=headers, timeout=30)
-    r.raise_for_status()
-    return r.json()
-
-
-# -----------------------
 # Image helpers
 # -----------------------
 def fetch_image(url: str) -> Image.Image:
@@ -428,8 +408,8 @@ def _format_case_choice(row: dict) -> str:
     source_ref = (row.get("source_ref") or "-").strip()
     return f"{case_name} | {case_id} | {doc_type} | {source_ref}"
 
-def filter_existing_case_choices(source_ref_query: str, cases_rows: list):
-    query = (source_ref_query or "").strip().lower()
+def filter_existing_case_choices(search_query: str, cases_rows: list):
+    query = (search_query or "").strip().lower()
     if not isinstance(cases_rows, list):
         return gr.update(choices=[], value=None), "Aucun cas existant trouve."
 
@@ -438,7 +418,8 @@ def filter_existing_case_choices(source_ref_query: str, cases_rows: list):
         if not isinstance(row, dict):
             continue
         source_ref = str(row.get("source_ref") or "").strip().lower()
-        if not query or query in source_ref:
+        case_id = _case_id_from_row(row).lower()
+        if not query or query in source_ref or query in case_id:
             filtered_rows.append(row)
 
     choices = [_format_case_choice(r) for r in filtered_rows]
@@ -446,12 +427,12 @@ def filter_existing_case_choices(source_ref_query: str, cases_rows: list):
         if query:
             return (
                 gr.update(choices=[], value=None),
-                f"Aucun cas trouve pour le filtre source_ref '{source_ref_query}'.",
+                f"Aucun cas trouve pour la recherche '{search_query}'.",
             )
         return gr.update(choices=[], value=None), "Aucun cas existant trouve."
 
     status = (
-        f"{len(choices)} cas correspondant(s) au filtre source_ref '{source_ref_query}'."
+        f"{len(choices)} cas correspondant(s) a la recherche '{search_query}'."
         if query
         else f"{len(choices)} cas charges. Selectionnez un cas puis cliquez sur Charger."
     )
@@ -1089,8 +1070,8 @@ def make_app():
             with gr.Accordion("Annotations existantes", open=False, elem_classes=["highlight-accordion"]):
                 with gr.Row():
                     existing_case_search = gr.Textbox(
-                        label="Filtrer par source_ref",
-                        placeholder="Ex. memoires/CRALMI ou CRALMI",
+                        label="Filtrer par source_ref ou case_id",
+                        placeholder="Ex. images/theses/... ou un case_id",
                         value="",
                         scale=3,
                     )
